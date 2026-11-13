@@ -1,0 +1,19 @@
+[Unit]
+Description=Unified FindMy console
+After=network-online.target
+[Service]
+User=findmyconsole
+Group=findmyconsole
+SupplementaryGroups=findmylocations
+WorkingDirectory=/opt/findmy-console
+ExecStart=/opt/google-findmy/.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8870 --no-access-log
+EnvironmentFile=/etc/findmy/console.env
+Restart=on-failure
+UMask=0007
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/findmy-locations
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,36 @@
+# Replace domains and ADMIN_PASSWORD_HASH. Caddy 2.8+ syntax.
+findmy.example.com {
+    @viewer path /view /view/*
+    handle @viewer {
+        reverse_proxy 127.0.0.1:8870 {
+            header_up Host 127.0.0.1:8870
+            header_up -Authorization
+            header_up -Proxy-Authorization
+        }
+    }
+    handle {
+        basic_auth {
+            admin {$ADMIN_PASSWORD_HASH}
+        }
+        reverse_proxy 127.0.0.1:8870 {
+            header_up Host 127.0.0.1:8870
+            header_up -Authorization
+            header_up -Proxy-Authorization
+        }
+    }
+}
+map.findmy.example.com {
+    @map {
+        path /baidu-map
+        method GET HEAD
+    }
+    handle @map {
+        reverse_proxy 127.0.0.1:8765 {
+            header_up Host localhost:8765
+            header_up -Authorization
+        }
+    }
+    handle {
+        respond "Not found" 404
+    }
+}

@@ -1,0 +1,5 @@
+FindMy==0.10.2
+fastapi==0.161.1
+uvicorn==0.54.0
+unicorn==2.1.4
+cryptography==50.0.2
