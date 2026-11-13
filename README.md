@@ -145,3 +145,7 @@ Apple 在 `services/findmy` 安装 requirements.txt 后运行 `python -m uvicorn
 Google `upstream/` 包含 GoogleFindMyTools 派生代码及 GPL-3.0 许可证，保留 LICENSE、UPSTREAM_COMMIT（当前记录660be5395702ff7f1a6174f4ec4c865a57c7b527）。Apple Python库由 requirements安装；第三方组件遵循各自许可证，不因放入新仓库而重新许可。没有复制第三方二进制运行库。
 
 明确排除：账号密码/Token、设备密钥与SN清单、位置数据库、生产日志、证书/SSH私钥、虚拟环境、编译产物、授权zip和设备烧录基线。缺失 `authorization-base.zip` 时授权助手下载入口会不可用；开发者需另行构建不含凭据的授权工具包。历史 burn-baseline.json 可选，不应复用生产基线到新环境。
+
+## 2026-11-13 地址服务回退规则
+
+百度返回日配额不足（302）时，本次请求回退 Photon / OpenStreetMap，暂停百度至北京时间次日00:05；其它失败沿用退避并回退。冷却状态保存在共享库 metadata，重启继续生效。有效OSM地址也缓存30天、跨设备/平台100米复用，不再强制升级百度。旧升级队列在worker初始化时清理，不删除已有地址。OSM维持每小时120次限流，达到限流时排队等待，不无限请求。测试：`python -m unittest discover -s tests -p test_address_fallback.py`，使用模拟接口，不消耗百度额度。

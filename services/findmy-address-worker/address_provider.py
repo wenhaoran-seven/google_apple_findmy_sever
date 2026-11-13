@@ -1,6 +1,7 @@
 """Server-only Baidu credentials; canonical inputs and cache keys stay WGS84."""
 import json,os,time,urllib.request,urllib.parse,logging
 from pathlib import Path
+from datetime import datetime,timezone,timedelta
 
 blocked_until=0
 failures=0
@@ -21,7 +22,15 @@ def baidu(lat,lon):
         raw=data.get('result') or {};address=str(raw.get('formatted_address') or '').strip()
         if not address:raise ProviderError('Baidu empty result')
     except Exception:
-        failures+=1;delay=min(3600,300*2**min(failures-1,4));blocked_until=time.time()+delay
+        failures+=1
+        now=time.time()
+        if status==302:
+            # Daily quota: retry after the next Beijing midnight, not every few minutes.
+            current=datetime.fromtimestamp(now,timezone(timedelta(hours=8)))
+            reset=(current+timedelta(days=1)).replace(hour=0,minute=5,second=0,microsecond=0)
+            blocked_until=reset.timestamp();delay=int(blocked_until-now)
+        else:
+            delay=min(3600,300*2**min(failures-1,4));blocked_until=now+delay
         logging.warning('Baidu request unavailable: status=%s; cooldown=%ss',status,delay)
         # Do not leak the token-bearing request URL through exceptions/logs.
         raise ProviderError('Baidu unavailable; cooldown '+str(delay)+'s') from None

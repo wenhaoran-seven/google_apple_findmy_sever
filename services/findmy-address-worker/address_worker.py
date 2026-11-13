@@ -34,9 +34,15 @@ def initialize():
         for row in con.execute('SELECT * FROM geocodes'):
             data=json.loads(row['result_json'])
             if data.get('found'):
-                if provider.enabled() and data.get('provider')!='Baidu':con.execute('INSERT OR IGNORE INTO baidu_upgrades(coordinate_key) VALUES(?)',(row['coordinate_key'],))
                 lat,lon=map(float,row['coordinate_key'].split(','))
                 con.execute('INSERT OR IGNORE INTO address_anchors VALUES(?,?,?)',(row['coordinate_key'],lat,lon))
+
+        # Valid OSM results are final cache entries, not mandatory Baidu upgrades.
+        con.execute('DELETE FROM baidu_upgrades')
+        state=con.execute("SELECT value FROM metadata WHERE key='baidu_cooldown'").fetchone()
+        if state:
+            data=json.loads(state[0]);provider.blocked_until=float(data.get('until',0));provider.failures=int(data.get('failures',0))
+
 
 def discover(limit=1000):
     with db.connect() as con:
@@ -107,13 +113,6 @@ def tick(batch=100):
         count=int(counter_row[0]) if counter_row else 0
         direction='ASC' if count%5==4 else 'DESC'
         request=con.execute("SELECT * FROM address_points WHERE status!='ready' AND next_at<=? ORDER BY priority "+direction+',next_at,rowid LIMIT 1',(now,)).fetchone()
-        if provider.available() and (count%5==0 or request is None):
-            upgrade=con.execute('''SELECT a.coordinate_key,a.latitude,a.longitude,u.attempts,1 AS upgrade
-                FROM baidu_upgrades u JOIN address_anchors a USING(coordinate_key)
-                LEFT JOIN address_points p ON p.anchor_key=a.coordinate_key
-                LEFT JOIN locations l ON l.id=p.location_id WHERE u.next_at<=?
-                GROUP BY a.coordinate_key ORDER BY MAX(l.timestamp) DESC LIMIT 1''',(now,)).fetchone()
-            if upgrade:request=upgrade
         if request:
             request=dict(request)
             request['baidu_reserved']=provider.available()
@@ -121,8 +120,7 @@ def tick(batch=100):
             if wait:request=None
             else:
                 con.execute("INSERT OR REPLACE INTO metadata VALUES('address_dispatch_count',?)",(str(count+1),))
-                if request.get('upgrade'):con.execute('UPDATE baidu_upgrades SET next_at=? WHERE coordinate_key=?',(now+60,request['coordinate_key']))
-                else:con.execute("UPDATE address_points SET status='pending',next_at=? WHERE coordinate_key=?",(now+60,request['coordinate_key']))
+                con.execute("UPDATE address_points SET status='pending',next_at=? WHERE coordinate_key=?",(now+60,request['coordinate_key']))
     if request:
         try:
             def fallback(lat,lon):
@@ -131,23 +129,23 @@ def tick(batch=100):
                         con.execute('BEGIN IMMEDIATE')
                         if reserve(con,time.time()):raise provider.ProviderError('Fallback quota reached')
                 return db.photon_request(lat,lon)
-            result=provider.reverse(request['latitude'],request['longitude'],fallback,allow_fallback=not request.get('upgrade'));address=result['address']
+            result=provider.reverse(request['latitude'],request['longitude'],fallback,allow_fallback=True);address=result['address']
             with db.connect() as con:
                 if address:
                     expiry=time.time()+30*86400
                     con.execute('INSERT OR REPLACE INTO geocodes VALUES(?,?,?)',(request['coordinate_key'],json.dumps(result,ensure_ascii=False),expiry))
                     con.execute('INSERT OR REPLACE INTO address_anchors VALUES(?,?,?)',(request['coordinate_key'],request['latitude'],request['longitude']))
-                    if not request.get('upgrade'):attach(con,request['coordinate_key'],{'coordinate_key':request['coordinate_key'],'expires_at':expiry},0)
-                    if result['provider']=='Baidu':con.execute('DELETE FROM baidu_upgrades WHERE coordinate_key=?',(request['coordinate_key'],))
-                    elif provider.enabled():con.execute('INSERT OR IGNORE INTO baidu_upgrades(coordinate_key) VALUES(?)',(request['coordinate_key'],))
+                    attach(con,request['coordinate_key'],{'coordinate_key':request['coordinate_key'],'expires_at':expiry},0)
                 else:
                     con.execute("UPDATE address_points SET status='empty',attempts=attempts+1,next_at=? WHERE coordinate_key=?",(time.time()+86400,request['coordinate_key']))
         except Exception as error:
             attempts=request['attempts']+1
             with db.connect() as con:
-                if request.get('upgrade'):con.execute('UPDATE baidu_upgrades SET attempts=?,next_at=? WHERE coordinate_key=?',(attempts,time.time()+min(3600,30*2**min(attempts,7)),request['coordinate_key']))
-                else:con.execute("UPDATE address_points SET status='retry',attempts=?,next_at=? WHERE coordinate_key=?",(attempts,time.time()+min(3600,30*2**min(attempts,7)),request['coordinate_key']))
+                con.execute("UPDATE address_points SET status='retry',attempts=?,next_at=? WHERE coordinate_key=?",(attempts,time.time()+min(3600,30*2**min(attempts,7)),request['coordinate_key']))
             logging.warning('Address provider request failed: %s',type(error).__name__)
+        finally:
+            with db.connect() as con:
+                con.execute("INSERT OR REPLACE INTO metadata VALUES('baidu_cooldown',?)",(json.dumps({'until':provider.blocked_until,'failures':provider.failures}),))
     return {'cache_hits':hits,'provider_request':bool(request)}
 
 def main():
