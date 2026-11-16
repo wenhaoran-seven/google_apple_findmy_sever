@@ -36,7 +36,7 @@ class ConsoleTests(unittest.TestCase):
             for d in rows[a['id']]:
                 if path=='devices/'+d['id']+'/rename':d['name']=body['name']
         body={'device_key':'sn:123456789012','name':' shared '}
-        with patch.object(c,'collector',collect),patch.object(c,'relay',side_effect=write) as relay:
+        with patch.object(c,'name_inventory',collect),patch.object(c,'relay',side_effect=write) as relay:
             r=self.client.post('/api/devices/rename',json=body)
             self.assertEqual(r.status_code,200);self.assertEqual(r.json()['updated'],2)
             self.assertEqual(relay.call_count,2)
@@ -45,10 +45,10 @@ class ConsoleTests(unittest.TestCase):
             self.client.post('/api/devices/rename',json=body)
             self.assertEqual(relay.call_count,2)
         rows['apple1'][0]['name']='old'
-        with patch.object(c,'collector',collect),patch.object(c,'relay',side_effect=TimeoutError):
+        with patch.object(c,'name_inventory',collect),patch.object(c,'relay',side_effect=TimeoutError):
             r=self.client.post('/api/devices/rename',json=body)
             self.assertEqual(r.status_code,409);self.assertIn('尚未全部同步',r.json()['detail'])
-        with patch.object(c,'collector',lambda a:{**collect(a),'available':False}),patch.object(c,'relay') as relay:
+        with patch.object(c,'name_inventory',lambda a:{**collect(a),'available':False}),patch.object(c,'relay') as relay:
             self.assertEqual(self.client.post('/api/devices/rename',json=body).status_code,409)
             relay.assert_not_called()
         self.assertEqual(self.client.post('/api/devices/rename',json={**body,'name':'   '}).status_code,422)

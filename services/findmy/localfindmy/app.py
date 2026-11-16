@@ -141,6 +141,7 @@ class Service:
                    "latitude": r.latitude, "longitude": r.longitude,
                    "accuracy_m": r.horizontal_accuracy, "confidence": r.confidence,
                    "status": r.status} for r in sorted(reports, key=lambda r: r.timestamp, reverse=True)]
+        item = self.devices.get(device_id, item)  # Keep names changed during the network request.
         result = accumulate(self.location_cache.get(device_id), device_id, item["name"], points, now())
         updated = {**self.location_cache, device_id: result}
         self.vault.write("locations", updated)
@@ -411,6 +412,10 @@ def add_device(s, name, key, sn=None):
     return device_summary(device_id, item)
 
 
+@app.get("/api/device-names")
+def device_names(request: Request):
+    return [{'id':ident,'sn':item.get('sn'),'name':item.get('name')} for ident,item in request.app.state.service.devices.items()]
+
 @app.get("/api/devices")
 async def devices(request: Request):
     return [device_summary(k, v) for k, v in request.app.state.service.devices.items()]
@@ -574,15 +579,14 @@ async def rename_batch(body: BatchRenameInput, request: Request):
 @app.post("/api/devices/{device_id}/rename")
 async def rename(device_id: str, body: NewKey, request: Request):
     s = request.app.state.service
-    async with s.lock:
-        item, key = s.device(device_id)
-        key.name = body.name
-        updated = {**item, "name": body.name, "key": key.to_json()}
-        devices = {**s.devices, device_id: updated}
-        s.vault.write("devices", devices)
-        s.devices = devices
-        return device_summary(device_id, updated)
-
+    # Local metadata update has no await: atomic on the event loop, independent of network queries.
+    item, key = s.device(device_id)
+    key.name = body.name
+    updated = {**item, "name": body.name, "key": key.to_json()}
+    devices = {**s.devices, device_id: updated}
+    s.vault.write("devices", devices)
+    s.devices = devices
+    return device_summary(device_id, updated)
 
 @app.delete("/api/devices/{device_id}")
 async def delete_device(device_id: str, request: Request):

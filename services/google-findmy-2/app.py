@@ -327,6 +327,10 @@ class NewDevice(BaseModel):
     cid: str | None = Field(default=None, pattern=r'^[0-9A-Fa-f]{8}$')
 
 
+@app.get('/api/device-names')
+def device_names(request: Request):
+    return [{k:d.get(k) for k in ('id','sn','name')} for d in request.app.state.service.store.all('device:')]
+
 @app.post('/api/devices')
 async def create(body: NewDevice, request: Request):
     if not body.name.strip(): raise HTTPException(422, '请输入设备名')
@@ -496,8 +500,8 @@ async def change_device_sn(id: str, body: DeviceSerial, request: Request):
 @app.post('/api/devices/{id}/rename')
 async def rename_device(id: str, body: DeviceRename, request: Request):
     s = request.app.state.service
-    if s.running:
-        raise HTTPException(409, '当前任务结束后再修改名称')
+    if any(j['operation']!='locate' for j in s.running_jobs.values()):
+        raise HTTPException(409, '注册、同步或续报任务结束后再修改名称')
     d = s.device(id)
     if d.get('delete_state'):
         raise HTTPException(409, '此设备等待确认注销，暂不能修改名称')
@@ -506,7 +510,7 @@ async def rename_device(id: str, body: DeviceRename, request: Request):
         raise HTTPException(422, '设备名称不能为空')
     d['name'] = name
     s.store.put('device:'+id, d)
-    return public_device(d, s.store)
+    return {k:d.get(k) for k in ('id','sn','name')}
 
 
 class DeviceConfiguration(BaseModel):

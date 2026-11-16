@@ -297,10 +297,16 @@ class RenameDevice(BaseModel):
 
 rename_device_lock=asyncio.Lock()
 
+def name_inventory(a):
+    try:
+        if a['state']!='ready':raise HTTPException(409)
+        return {**a,'available':True,'devices':relay(a,'device-names')}
+    except HTTPException:return {**a,'available':False,'devices':[]}
+
 def sync_device_name(body):
     name=body.name.strip()
     if not name:raise HTTPException(422,'设备名称不能为空')
-    with ThreadPoolExecutor(max_workers=8) as pool:parts=list(pool.map(collector,accounts()))
+    with ThreadPoolExecutor(max_workers=8) as pool:parts=list(pool.map(name_inventory,accounts()))
     unavailable=[a['label'] for a in parts if not a['available']]
     if unavailable:raise HTTPException(409,'无法核对所有平台，尚未修改名称：'+ '、'.join(unavailable))
     targets=[]
@@ -316,7 +322,7 @@ def sync_device_name(body):
         except Exception:
             # A timeout can occur after commit: verify by reading before reporting failure.
             pass
-        fresh=collector(a)
+        fresh=name_inventory(a)
         confirmed=fresh['available'] and any(x['id']==d['id'] and x['name']==name for x in fresh['devices'])
         return {'account':a['label'],'platform':a['platform'],'confirmed':confirmed}
     try:
@@ -324,6 +330,11 @@ def sync_device_name(body):
     finally:invalidate()
     failed=[r['account'] for r in results if not r['confirmed']]
     if failed:raise HTTPException(409,'名称尚未全部同步；未确认：'+ '、'.join(failed)+'。部分平台可能已保存，请保持当前名称重试。')
+    if cached:
+        for item in cached.get('devices',[]):
+            if item['id']==body.device_key:
+                item['name']=name
+                for member in item['members']:member['name']=name
     return {'ok':True,'name':name,'updated':len(results),'results':results}
 
 @app.post('/api/devices/rename')
