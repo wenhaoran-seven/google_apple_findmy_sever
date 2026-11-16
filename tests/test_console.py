@@ -28,28 +28,17 @@ class ConsoleTests(unittest.TestCase):
         c.relay_tokens.clear()
 
     def test_shared_device_rename(self):
-        rows={a['id']:[] for a in c.accounts()}
-        for ident in ('apple1','google2'):rows[ident]=[{'id':ident+'-device','sn':'123456789012','name':'old'}]
-        rows['google1']=[{'id':'other','sn':'999999999999','name':'untouched'}]
-        def collect(a):return {**a,'available':True,'devices':rows[a['id']]}
-        def write(a,path,body):
-            for d in rows[a['id']]:
-                if path=='devices/'+d['id']+'/rename':d['name']=body['name']
+        for a in c.accounts():
+            ds=[{'id':a['id']+'-device','sn':'123456789012','name':'old'}] if a['id'] in ('apple1','google2') else []
+            c.control.save_projection({**a,'available':True,'devices':ds})
         body={'device_key':'sn:123456789012','name':' shared '}
-        with patch.object(c,'name_inventory',collect),patch.object(c,'relay',side_effect=write) as relay:
+        with patch.object(c,'relay',side_effect=AssertionError('web must never contact collectors')) as relay:
             r=self.client.post('/api/devices/rename',json=body)
             self.assertEqual(r.status_code,200);self.assertEqual(r.json()['updated'],2)
-            self.assertEqual(relay.call_count,2)
-            self.assertEqual(rows['google1'][0]['name'],'untouched')
-            self.assertEqual(rows['apple1'][0]['name'],'shared')
-            self.client.post('/api/devices/rename',json=body)
-            self.assertEqual(relay.call_count,2)
-        rows['apple1'][0]['name']='old'
-        with patch.object(c,'name_inventory',collect),patch.object(c,'relay',side_effect=TimeoutError):
-            r=self.client.post('/api/devices/rename',json=body)
-            self.assertEqual(r.status_code,409);self.assertIn('尚未全部同步',r.json()['detail'])
-        with patch.object(c,'name_inventory',lambda a:{**collect(a),'available':False}),patch.object(c,'relay') as relay:
-            self.assertEqual(self.client.post('/api/devices/rename',json=body).status_code,409)
+            self.assertTrue(r.json()['sync_pending'])
+            result=self.client.get('/api/console').json()
+            self.assertEqual(result['devices'][0]['name'],'shared')
+            self.assertEqual([m['name'] for m in result['devices'][0]['members']],['shared','shared'])
             relay.assert_not_called()
         self.assertEqual(self.client.post('/api/devices/rename',json={**body,'name':'   '}).status_code,422)
 
@@ -110,7 +99,8 @@ class ConsoleTests(unittest.TestCase):
                 p={'timestamp':stamp,'latitude':22,'longitude':113,'status':status,'altitude':alt,'accuracy_m':12}
                 con.execute('INSERT INTO locations(source,platform,sn,device_id,device_name,timestamp,latitude,longitude,fingerprint,raw_json,first_seen_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(source,'apple' if source=='apple' else 'google',sn,source,'x',stamp,22,113,source,json.dumps(p),now,now))
         def collector(a):return {**a,'available':True,'devices':[{'id':a['id'],'sn':sn,'name':'设备','pubkey':'01'*28}]} if a['id'] in ('apple1','google1') else {**a,'available':True,'devices':[]}
-        with patch.object(c,'collector',collector):result=c.snapshot()
+        for a in c.accounts():c.control.save_projection(collector(a))
+        result=c.snapshot()
         self.assertEqual(len(result['devices']),1);d=result['devices'][0];self.assertEqual(len(d['members']),2)
         self.assertEqual(d['latest']['status'],3);self.assertEqual(d['latest']['altitude'],70);self.assertEqual(d['latest']['platform'],'google');self.assertEqual(d['latest']['address_status'],'pending')
     def test_import_dedup(self):

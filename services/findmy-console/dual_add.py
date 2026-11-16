@@ -127,6 +127,10 @@ async def process(job,row):
     if row['google'] in ('done','error'):return
     try:
         a=row['google_account'];status=await call(a,'status');d=next((d for d in status['devices'] if d.get('sn')==row['sn']),None)
+        if row.pop('retry_verify',False) and row.get('register_job'):
+            previous=next((j for j in status.get('jobs',[]) if j['id']==row['register_job']),None)
+            if previous and previous['state']=='failed':row.pop('register_attempted',None);row.pop('register_job',None)
+            save(job)
         if d and d.get('pubkey') and d['pubkey'].upper()!=row['pubkey']:raise HTTPException(409,'Google 同 SN 公钥冲突')
         if not d:
             if row.get('google_id'):raise HTTPException(409,'原 Google 设备已不存在，请核对，未重新生成密钥')
@@ -215,8 +219,6 @@ def install(app,module):
                 if i['apple']=='error':i['apple']='pending'
                 if i['google']=='error':
                     # Explicit retry may retry a confirmed failure, but never an uncertain submission.
-                    if i.get('register_job'):
-                        st=await call(i['google_account'],'status');j=next((j for j in st.get('jobs',[]) if j['id']==i['register_job']),None)
-                        if j and j['state']=='failed':i.pop('register_attempted',None);i.pop('register_job',None)
+                    i['retry_verify']=True
                     i['google']='pending'
             job['state']='queued';save(job);return job

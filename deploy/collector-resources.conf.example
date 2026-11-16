@@ -1,0 +1,6 @@
+# Apply to each Apple/Google collector, address worker and reporting service.
+# systemctl set-property SERVICE CPUWeight=20 IOWeight=20
+# This can be applied live; no collector restart is required.
+[Service]
+CPUWeight=20
+IOWeight=20

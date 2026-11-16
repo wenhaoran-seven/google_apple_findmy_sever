@@ -1,0 +1,26 @@
+[Unit]
+Description=FindMy background account synchronization and control commands
+After=network-online.target
+[Service]
+User=findmyconsole
+Group=findmyconsole
+SupplementaryGroups=findmylocations
+WorkingDirectory=/opt/findmy-console
+ExecStart=/opt/google-findmy/.venv/bin/python control_worker.py
+Environment=FINDMY_LOCATION_DB=/var/lib/findmy-locations/locations.sqlite3
+Environment=FINDMY_CONTROL_DB=/var/lib/findmy-control/control.sqlite3
+Environment=FINDMY_CONSOLE_TOKEN_FILE=/var/lib/findmy-console/token
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/findmy-locations /var/lib/findmy-control
+Nice=5
+CPUQuota=100%
+MemoryHigh=256M
+MemoryMax=512M
+[Install]
+WantedBy=multi-user.target

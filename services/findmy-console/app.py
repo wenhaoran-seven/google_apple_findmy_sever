@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse,FileResponse,JSONResponse,Response
 from pydantic import BaseModel,Field
 import central_locations as db
 import dual_add
+import control_store as control
 import sys
 from polling_settings import install as install_polling
 
@@ -25,11 +26,11 @@ CREATE TABLE IF NOT EXISTS console_imports(id TEXT PRIMARY KEY,account TEXT,item
 def initialize():
     db.initialize()
     dual_add.initialize()
+    control.initialize()
     with db.connect() as con:
         con.executescript(SCHEMA)
         for ident,platform,source,port,label in [('apple1','apple','apple',8765,'Apple 账号1'),('google1','google','google1',8767,'Google 账号1'),('google2','google','google2',8769,'Google 账号2'),('google3','google','google3',8771,'Google 账号3')]:
             con.execute('INSERT OR IGNORE INTO managed_accounts VALUES(?,?,?,?,?,?,NULL,?)',(ident,platform,source,port,label,'ready',time.time()))
-        con.execute("UPDATE console_imports SET state='queued' WHERE state='running'")
         baseline=ROOT/'burn-baseline.json'
         if baseline.is_file() and not con.execute("SELECT 1 FROM metadata WHERE key='burn_baseline_20261111'").fetchone():
             data=json.loads(baseline.read_text(encoding='utf-8'))
@@ -124,7 +125,8 @@ def apple_battery(con,sn,source,ident):
 
 
 def snapshot():
-    with ThreadPoolExecutor(max_workers=8) as pool:parts=list(pool.map(collector,accounts()))
+    parts=control.projections(accounts())
+    names=control.names()
     merged={}
     for a in parts:
         for d in a['devices']:
@@ -135,6 +137,12 @@ def snapshot():
             item['members'].append({**d,'account_id':a['id'],'account_label':a['label'],'platform':a['platform'],'source':a['source']})
     with db.connect() as con:
         for item in merged.values():
+            override=names.get(item['id'])
+            if override:
+                item['name']=override['name']
+                item['name_sync_pending']=any(m['name']!=override['name'] for m in item['members'])
+                item['name_sync_error']=override['error'] if item['name_sync_pending'] else None
+                for m in item['members']:m['name']=override['name']
             member=item['members'][0]
             item['mac']=mac(item['pubkey']) if item['sn'] else '--'
             item['latest']=latest(con,item['sn'],member['source'],member['id'])
@@ -143,37 +151,15 @@ def snapshot():
             item['burn_state']=burn[0] if burn else 'unknown'
     return {'accounts':[{k:v for k,v in a.items() if k!='devices'} for a in parts],'devices':list(merged.values())}
 
-cached=None;cached_at=0;generation=0;cache_lock=asyncio.Lock()
 def invalidate():
-    global cached_at,generation
-    cached_at=0;generation+=1
+    # Compatibility for import handlers: every web read now uses the DB.
+    pass
 
 async def get_snapshot():
-    global cached,cached_at
-    async with cache_lock:
-        if cached and time.monotonic()-cached_at<3:return cached
-        version=generation;result=await asyncio.to_thread(snapshot)
-        if version==generation:cached=result;cached_at=time.monotonic()
-        return result
+    return await asyncio.to_thread(snapshot)
 
-# Display reads may use the last snapshot; mutations still call strict get_snapshot().
-display_refresh=None
 async def display_snapshot():
-    global display_refresh
-    if cached is None:return await get_snapshot()
-    stale=time.monotonic()-cached_at>=3
-    if stale and (display_refresh is None or display_refresh.done()):
-        display_refresh=asyncio.create_task(refresh_display())
-    return {**cached,'refreshing':stale}
-
-async def refresh_display():
-    try:await get_snapshot()
-    except Exception:relay_logger.exception('Display snapshot refresh failed')
-
-async def warm_display():
-    while True:
-        await refresh_display()
-        await asyncio.sleep(10)
+    return await get_snapshot()
 
 
 async def import_loop():
@@ -195,11 +181,8 @@ async def import_loop():
 
 @asynccontextmanager
 async def lifespan(app):
-    initialize();task=asyncio.create_task(import_loop());paired=asyncio.create_task(dual_add.worker());warmer=asyncio.create_task(warm_display())
+    initialize()
     yield
-    task.cancel();paired.cancel();warmer.cancel();
-    if display_refresh:display_refresh.cancel()
-    await asyncio.gather(task,paired,warmer,*([display_refresh] if display_refresh else []),return_exceptions=True)
 
 app=FastAPI(lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 install_polling(app);db.install(app);dual_add.install(app,sys.modules[__name__])
@@ -295,51 +278,15 @@ class RenameDevice(BaseModel):
     device_key:str=Field(min_length=1,max_length=200)
     name:str=Field(min_length=1,max_length=80)
 
-rename_device_lock=asyncio.Lock()
-
-def name_inventory(a):
-    try:
-        if a['state']!='ready':raise HTTPException(409)
-        return {**a,'available':True,'devices':relay(a,'device-names')}
-    except HTTPException:return {**a,'available':False,'devices':[]}
-
-def sync_device_name(body):
+@app.post('/api/devices/rename')
+def rename_device(body:RenameDevice):
     name=body.name.strip()
     if not name:raise HTTPException(422,'设备名称不能为空')
-    with ThreadPoolExecutor(max_workers=8) as pool:parts=list(pool.map(name_inventory,accounts()))
-    unavailable=[a['label'] for a in parts if not a['available']]
-    if unavailable:raise HTTPException(409,'无法核对所有平台，尚未修改名称：'+ '、'.join(unavailable))
-    targets=[]
-    for a in parts:
-        for d in a['devices']:
-            key='sn:'+str(d['sn']) if d.get('sn') else a['id']+'~'+d['id']
-            if key==body.device_key:targets.append((a,d))
+    targets=[d for a in control.projections(accounts()) for d in a['devices']
+             if ('sn:'+str(d['sn']) if d.get('sn') else a['id']+'~'+d['id'])==body.device_key]
     if not targets:raise HTTPException(404,'设备不存在，请刷新列表')
-    def update(pair):
-        a,d=pair
-        try:
-            if d['name']!=name:relay(a,'devices/'+d['id']+'/rename',{'name':name})
-        except Exception:
-            # A timeout can occur after commit: verify by reading before reporting failure.
-            pass
-        fresh=name_inventory(a)
-        confirmed=fresh['available'] and any(x['id']==d['id'] and x['name']==name for x in fresh['devices'])
-        return {'account':a['label'],'platform':a['platform'],'confirmed':confirmed}
-    try:
-        with ThreadPoolExecutor(max_workers=8) as pool:results=list(pool.map(update,targets))
-    finally:invalidate()
-    failed=[r['account'] for r in results if not r['confirmed']]
-    if failed:raise HTTPException(409,'名称尚未全部同步；未确认：'+ '、'.join(failed)+'。部分平台可能已保存，请保持当前名称重试。')
-    if cached:
-        for item in cached.get('devices',[]):
-            if item['id']==body.device_key:
-                item['name']=name
-                for member in item['members']:member['name']=name
-    return {'ok':True,'name':name,'updated':len(results),'results':results}
-
-@app.post('/api/devices/rename')
-async def rename_device(body:RenameDevice):
-    async with rename_device_lock:return await asyncio.to_thread(sync_device_name,body)
+    control.rename(body.device_key,name)
+    return {'ok':True,'name':name,'updated':len(targets),'sync_pending':True}
 
 class RenameAccount(BaseModel):
     label:str=Field(min_length=1,max_length=60)
@@ -388,13 +335,21 @@ async def proxy(ident:str,path:str,request:Request):
         for d in (await get_snapshot())['devices']:
             if d['sn']==body['sn'] and any(m['platform']=='google' and m['account_id']!=ident for m in d['members']):raise HTTPException(409,'此 SN 已属于其他 Google 账号')
     from urllib.parse import urlencode
-    result=await asyncio.to_thread(relay,a,path+('?' + urlencode(query) if query else ''),body,method)
-    if method!='GET':
-        invalidate()
-        if a['platform']=='google' and path=='devices':
-            with db.connect() as con:con.execute("INSERT OR IGNORE INTO burn_registry VALUES(?,'unburned',NULL,?,'new Google identity')",(result['sn'],time.time()))
-    if path.endswith(('/export','/identity')):return JSONResponse(result,headers={'Cache-Control':'no-store'})
-    return result
+    ident=control.submit(a['id'],path+('?' + urlencode(query) if query else ''),body,method)
+    if request.headers.get('x-control-async')=='1':
+        return JSONResponse({'control_task':ident},status_code=202)
+    # Compatibility for existing authorization helpers. This awaits database
+    # state asynchronously; no collector connection or lock exists in the web.
+    for _ in range(600):
+        task=await asyncio.to_thread(control.read,ident)
+        if task['state'] not in ('queued','running'):
+            return JSONResponse(task['result'],status_code=task['code'] or 500)
+        await asyncio.sleep(.5)
+    return JSONResponse({'detail':'后台任务仍在处理，请勿重复提交','control_task':ident},status_code=202)
+
+@app.get('/api/control-tasks/{ident}')
+def control_task(ident:str):return control.read(ident)
+
 
 @app.get('/api/unified-track')
 def track(sn:str='',account_id:str='',device_id:str='',limit:int|None=None,cursor:str='',start:float|None=None,end:float|None=None,platform:str='all'):

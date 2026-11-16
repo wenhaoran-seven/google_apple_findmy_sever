@@ -153,3 +153,30 @@ Google `upstream/` 包含 GoogleFindMyTools 派生代码及 GPL-3.0 许可证，
 ## 2026-11-16 名称保存优化
 
 统一控制台改名使用采集器 `/api/device-names` 轻量接口预检和写后核对，不再拉取全量状态、历史统计和调度详情。Apple本地名称写入不等待网络查询门锁，操作中没有await，位置请求返回后重新读取当前名称。Google允许locate查询期间改名，但注册/同步/续报等独占任务期间仍拒绝改名以防子进程覆盖。只有所有平台核对一致才返回成功，部分失败仍明确提示。控制台与网页缓存即时更新，成功后不再等待全量页面刷新。新增并发行为测试不调用外部位置服务。
+
+## 网页与采集进程隔离（2026-11-16）
+
+统一网页 `findmy-console` 不再在 HTTP 请求或 lifespan 中读取采集器 HTTP 状态。设备列表来自持久化账号投影，最新位置和轨迹来自共享位置库。采集器断线、启动回填或 Google 请求超时不会清空已有列表。超过 180 秒未更新的账号显示同步异常，保留最后成功数据；位置点仍按采集器实际入库时间更新。
+
+独立的 `control_worker.py` 负责：
+
+- 每个账号独立循环获取设备投影（一次完成后等待 60 秒），失败保留旧投影；不同账号互不等待。
+- 执行登录、2FA、注册、删除、配置、密钥读取等命令。浏览器用 `X-Control-Async: 1` 提交取得任务 ID，通过 `/api/control-tasks/{id}` 轮询。旧授权工具兼容异步等待 DB 结果。
+- 执行原有单平台导入和双平台添加任务。HTTP 服务重启不会重启这些任务。
+- 同 SN 的统一名称在控制库即时保存，随后幂等同步采集器；旧投影不能覆盖新名称。
+
+`FINDMY_CONTROL_DB=/var/lib/findmy-control/control.sqlite3` 是独立 WAL 数据库，与大量位置写入分开。账号投影、命令请求和结果采用 Fernet 加密，密钥在同目录 `control.key`（0600）。目录只给 findmyconsole 用户访问。**数据库和密钥必须一起备份，均不能提交 Git；不要替换或重新生成生产密钥。** 命令完成后清除请求正文，结果保留一小时；排队超过 15 分钟未执行则失败。后台重启时，把执行中命令标记为结果未确认，不自动重发。名称同步属于幂等操作，可自动重试。已有导入任务沿用各自的逐项检查点。
+
+部署顺序：
+
+1. 备份 `/opt/findmy-console`、systemd 配置和数据库；安装 `cryptography` 依赖。
+2. 创建 `/var/lib/findmy-control`，属主 findmyconsole、权限 0700；网页及 worker 配置相同的两个数据库路径。
+3. 切换网页前，用 `collector(account)` 成功采集所有现有账号，逐个 `control_store.save_projection(...)`，核对账号和设备数量。不可用账号先排查，不以空列表替代。
+4. 安装 `deploy/findmy-control-worker.service.example`，同时更新网页服务的 `ReadWritePaths` 和控制库环境变量。启用 worker；不需要重启 Apple/Google 采集器。
+5. 部署前端 console.js/index.html，重启网页服务，检查列表、名称、轨迹和命令任务；worker 有单实例文件锁，不能同时运行第二个。
+
+运行：`systemctl enable --now findmy-control-worker`；排障：`journalctl -u findmy-control-worker`。worker 需要 Linux（systemd 和 flock），资源默认 CPUQuota=100%、MemoryHigh=256M、MemoryMax=512M、Nice=5。停止 worker 后网页已有列表、轨迹、名称仍可使用，需外部服务的操作会排队；不要把“已排队”误认为注册或登录成功。恢复后继续执行尚未开始的命令。
+
+网页数据库读取仍受磁盘和服务器资源影响，并不是无限容量保证。账号授权、Google 注册等外部操作的实际完成时间仍由相应平台决定。生产回滚时先停止 worker，防止旧网页和 worker 同时执行导入循环，再恢复网页代码和静态文件；保留控制库和密钥以便排查。
+
+网页服务使用 CPUWeight=1000、IOWeight=1000、MemoryLow=64M；采集/地址/上报服务可按 `deploy/collector-resources.conf.example` 设置 CPUWeight=20、IOWeight=20，支持 `systemctl set-property` 在线应用，不重启采集。权重用于竞争时优先保障网页，并不替代增加物理内存或磁盘容量。
