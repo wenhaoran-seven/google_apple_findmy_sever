@@ -180,3 +180,5 @@ Google `upstream/` 包含 GoogleFindMyTools 派生代码及 GPL-3.0 许可证，
 网页数据库读取仍受磁盘和服务器资源影响，并不是无限容量保证。账号授权、Google 注册等外部操作的实际完成时间仍由相应平台决定。生产回滚时先停止 worker，防止旧网页和 worker 同时执行导入循环，再恢复网页代码和静态文件；保留控制库和密钥以便排查。
 
 网页服务使用 CPUWeight=1000、IOWeight=1000、MemoryLow=64M；采集/地址/上报服务可按 `deploy/collector-resources.conf.example` 设置 CPUWeight=20、IOWeight=20，支持 `systemctl set-property` 在线应用，不重启采集。权重用于竞争时优先保障网页，并不替代增加物理内存或磁盘容量。
+
+设备列表在网页进程内每 3 秒从数据库刷新内存快照（无外部请求）；HTTP 读取不等待磁盘。网页启动时先从持久化投影恢复快照，保存名称立即更新快照并递增版本，防止并发旧读取覆盖新名称。超过 30 秒未能刷新则明确提示保留旧数据。轨迹仍按需分页读库。

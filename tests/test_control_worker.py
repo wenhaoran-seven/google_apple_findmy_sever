@@ -11,7 +11,7 @@ class IsolationTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
         self.env=patch.dict(os.environ,{'FINDMY_LOCATION_DB':str(Path(self.tmp.name)/'locations.db'),'FINDMY_CONTROL_DB':str(Path(self.tmp.name)/'control.db')})
-        self.env.start();host.initialize()
+        self.env.start();host.initialize();host.cached=None;host.cached_at=0
         self.client=TestClient(host.app)
         self.client.headers.update({'X-Local-Token':host.TOKEN,'X-Control-Async':'1'})
     def tearDown(self):self.env.stop();self.tmp.cleanup()
@@ -74,3 +74,25 @@ class IsolationTests(unittest.TestCase):
         client=TestClient(host.app)
         self.assertEqual(client.get('/api/control-tasks/'+ident).status_code,403)
         self.assertEqual(client.get('/view/control-tasks/'+ident).status_code,403)
+
+    def test_display_does_not_wait_for_database(self):
+        import asyncio
+        host.cached={'accounts':[],'devices':[{'name':'saved'}]};host.cached_at=time.time()
+        with patch.object(host,'get_snapshot',side_effect=AssertionError('display waits for DB')):
+            self.assertEqual(asyncio.run(host.display_snapshot())['devices'][0]['name'],'saved')
+
+    def test_inflight_old_snapshot_cannot_replace_new_name(self):
+        import asyncio
+        async def run():
+            started=asyncio.Event();release=asyncio.Event()
+            async def read():
+                started.set();await release.wait()
+                return {'accounts':[],'devices':[{'name':'old'}]}
+            host.cached={'accounts':[],'devices':[{'name':'new'}]}
+            with patch.object(host,'get_snapshot',side_effect=read):
+                task=asyncio.create_task(host.warm_database())
+                await started.wait();host.invalidate();release.set()
+                await asyncio.sleep(.01)
+                task.cancel();await asyncio.gather(task,return_exceptions=True)
+            self.assertEqual(host.cached['devices'][0]['name'],'new')
+        asyncio.run(run())

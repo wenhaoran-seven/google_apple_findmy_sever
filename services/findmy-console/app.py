@@ -151,15 +151,30 @@ def snapshot():
             item['burn_state']=burn[0] if burn else 'unknown'
     return {'accounts':[{k:v for k,v in a.items() if k!='devices'} for a in parts],'devices':list(merged.values())}
 
+cached=None
+cached_at=0
+generation=0
+
 def invalidate():
-    # Compatibility for import handlers: every web read now uses the DB.
-    pass
+    global generation
+    generation+=1
 
 async def get_snapshot():
     return await asyncio.to_thread(snapshot)
 
 async def display_snapshot():
-    return await get_snapshot()
+    if cached is None:return await get_snapshot()
+    return {**cached,'database_warning':'数据库快照暂未更新，显示最近数据' if time.time()-cached_at>30 else None}
+
+async def warm_database():
+    global cached,cached_at
+    while True:
+        version=generation
+        try:
+            result=await get_snapshot()
+            if version==generation:cached=result;cached_at=time.time()
+        except Exception:relay_logger.exception('Database projection refresh failed')
+        await asyncio.sleep(3)
 
 
 async def import_loop():
@@ -181,8 +196,14 @@ async def import_loop():
 
 @asynccontextmanager
 async def lifespan(app):
+    global cached,cached_at
     initialize()
-    yield
+    cached=await get_snapshot();cached_at=time.time()
+    warmer=asyncio.create_task(warm_database())
+    try:yield
+    finally:
+        warmer.cancel()
+        await asyncio.gather(warmer,return_exceptions=True)
 
 app=FastAPI(lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 install_polling(app);db.install(app);dual_add.install(app,sys.modules[__name__])
@@ -227,7 +248,7 @@ def public_devices(snapshot):
         if point is not None:point['address']=address if isinstance(address,str) else None
         battery=d.get('battery') or {}
         result.append({**{k:d.get(k) for k in ('name','sn','mac')},'latest':point,'battery':{k:battery.get(k) for k in ('percent','critical')} if battery else None})
-    return {'devices':result,'readonly':True,'refreshing':snapshot.get('refreshing',False)}
+    return {'devices':result,'readonly':True,'refreshing':snapshot.get('refreshing',False),'database_warning':snapshot.get('database_warning')}
 
 @app.get('/view',response_class=HTMLResponse)
 @app.get('/view/',response_class=HTMLResponse)
@@ -272,7 +293,11 @@ def new_account(body:NewAccount):
         ident=body.platform+str(index);port=max([r['port'] for r in rows if r['port']>=19000]+[18999])+1
         if port>19999:raise HTTPException(409,'账号端口范围已用尽')
         con.execute('INSERT INTO managed_accounts VALUES(?,?,?,?,?,?,NULL,?)',(ident,body.platform,ident,port,body.label.strip(),'provisioning',time.time()))
-    invalidate();return {'id':ident,'state':'provisioning'}
+    invalidate()
+    if cached:
+        created=next(a for a in accounts() if a['id']==ident)
+        cached['accounts'].append({**created,'available':False,'error':'账号环境正在准备'})
+    return {'id':ident,'state':'provisioning'}
 
 class RenameDevice(BaseModel):
     device_key:str=Field(min_length=1,max_length=200)
@@ -286,6 +311,12 @@ def rename_device(body:RenameDevice):
              if ('sn:'+str(d['sn']) if d.get('sn') else a['id']+'~'+d['id'])==body.device_key]
     if not targets:raise HTTPException(404,'设备不存在，请刷新列表')
     control.rename(body.device_key,name)
+    invalidate()
+    if cached:
+        for item in cached['devices']:
+            if item['id']==body.device_key:
+                item['name']=name
+                for member in item['members']:member['name']=name
     return {'ok':True,'name':name,'updated':len(targets),'sync_pending':True}
 
 class RenameAccount(BaseModel):
@@ -299,6 +330,12 @@ def rename_account(ident:str,body:RenameAccount):
         changed=con.execute('UPDATE managed_accounts SET label=? WHERE id=?',(label,ident))
         if not changed.rowcount:raise HTTPException(404,'账号不存在')
     invalidate()
+    if cached:
+        for a in cached['accounts']:
+            if a['id']==ident:a['label']=label
+        for d in cached['devices']:
+            for m in d['members']:
+                if m['account_id']==ident:m['account_label']=label
     return {'id':ident,'label':label}
 
 @app.get('/api/accounts/{ident}/authorization-helper')
