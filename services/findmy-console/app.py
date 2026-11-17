@@ -10,6 +10,7 @@ from pydantic import BaseModel,Field
 import central_locations as db
 import dual_add
 import control_store as control
+import cloud_auth
 import sys
 from polling_settings import install as install_polling
 
@@ -27,6 +28,7 @@ def initialize():
     db.initialize()
     dual_add.initialize()
     control.initialize()
+    cloud_auth.initialize()
     with db.connect() as con:
         con.executescript(SCHEMA)
         for ident,platform,source,port,label in [('apple1','apple','apple',8765,'Apple 账号1'),('google1','google','google1',8767,'Google 账号1'),('google2','google','google2',8769,'Google 账号2'),('google3','google','google3',8771,'Google 账号3')]:
@@ -206,7 +208,7 @@ async def lifespan(app):
         await asyncio.gather(warmer,return_exceptions=True)
 
 app=FastAPI(lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
-install_polling(app);db.install(app);dual_add.install(app,sys.modules[__name__])
+install_polling(app);db.install(app);dual_add.install(app,sys.modules[__name__]);cloud_auth.install(app,sys.modules[__name__])
 
 @app.middleware('http')
 async def guard(request,call_next):

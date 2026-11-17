@@ -1,0 +1,14 @@
+[Unit]
+Description=Temporary Google authorization desktop launcher
+After=network-online.target findmy-console.service
+[Service]
+User=root
+WorkingDirectory=/opt/findmy-console
+ExecStart=/opt/google-findmy/.venv/bin/python google_auth_manager.py
+Environment=FINDMY_LOCATION_DB=/var/lib/findmy-locations/locations.sqlite3
+Environment=FINDMY_CONTROL_DB=/var/lib/findmy-control/control.sqlite3
+Restart=on-failure
+RestartSec=5
+UMask=0077
+[Install]
+WantedBy=multi-user.target

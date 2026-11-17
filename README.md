@@ -186,3 +186,17 @@ Google `upstream/` 包含 GoogleFindMyTools 派生代码及 GPL-3.0 许可证，
 ## Google 推送连接恢复（2026-11-17）
 
 位置采集器会检查 MCS 监听任务和停止状态，避免外层进程存活但内部监听已退出时继续等待 60 秒。对明确的推送断连，关闭旧连接后最多自动重试一次只读位置查询；限流、鉴权拒绝和初始化冷却不重复尝试。注册、删除、续报操作不受此重试影响。三个 Google 实例使用相同修复。测试 `tests/test_push_recovery.py` 覆盖停止状态、已结束监听任务、健康连接、重试上限及冷却/非连接错误。
+
+## 云端 Google 浏览器授权（2026-11-17）
+
+账号管理 → Google 账号“授权 / 同步” → 填写邮箱 → “启动云端授权”。新窗口显示服务器上的临时 Google Chrome，用户直接在 Google 页面输入密码、二次验证或加密数据 PIN。新凭据完整生成后才提交目标账号的 `auth/import`；未完成验证不会替换现有凭据。成功后浏览器退出；失败、取消、20分钟到期也清理临时目录。关闭浏览器标签页不会立刻取消，可从账号管理重新打开或取消。
+
+网页入口 `cloud_auth.py` 只管理会话及 WebSocket，root 管理器 `google_auth_manager.py` 启动受限的 `findmyauth` 用户进程，`google_auth_runner.py` 执行临时桌面及原有 Google 授权流程。全服务器同时只允许一个授权会话。采集服务不依赖浏览器常驻。Google 风控仍可能要求额外确认；这不是绕过验证的接口。
+
+部署依赖：`xvfb x11vnc novnc openbox google-chrome-stable`，Google Python 环境中的 selenium、undetected_chromedriver、websockets。创建无登录权限的系统用户 `findmyauth`；把与 Chrome 主版本一致的 ChromeDriver 放到 `/opt/findmy-google-auth/chromedriver`。Chrome 升级后需同步检查驱动版本。安装 `deploy/findmy-google-auth-manager.service.example` 到 systemd 并启用。将前端 cloud-auth 资源安装到 console/static。无需开放 VNC 端口：18979 与18981只监听本机，外部走既有 HTTPS 和管理登录保护。
+
+管理器使用现有 `FINDMY_CONTROL_DB`，位置数据不承载授权凭据。会话目录 `/var/lib/findmy-google-auth/<随机ID>` 为独立0700目录；浏览器用户不能访问采集器0700数据目录。VNC临时口令加密保存，会话Cookie为Secure/HttpOnly/SameSite=Strict，仅授权路径有效。WebSocket校验来源、Cookie、会话状态和到期时间。`/view`不提供授权入口。不要把 `/auth-browser` 配成免登录路由。
+
+临时进程限时1200秒、CPU75%、内存软限700MB/硬限900MB；小内存服务器启动可能较慢。取消或超时由管理器停止整个systemd控制组并删除临时文件。状态通过账号管理轮询，无密码、验证码、PIN或Google响应正文日志。排障看 `systemctl status findmy-google-auth-manager` 和对应journal；安全诊断仅保留异常类型与源码栈位置。
+
+部署烟雾测试可临时给管理器设置 `FINDMY_AUTH_TEST_MODE=1`，它只打开登录页，不导入凭据。测试后必须删除此环境设置并重启管理器。真实端到端授权仍需用户亲自完成 Google 登录与加密数据验证。
