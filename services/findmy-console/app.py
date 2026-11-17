@@ -353,8 +353,10 @@ def authorization_helper(ident:str):
     if not bundle.is_file():raise HTTPException(503,'授权工具尚未准备好')
     output=io.BytesIO()
     with zipfile.ZipFile(bundle) as src,zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as dest:
-        for name in src.namelist():dest.writestr(name,src.read(name))
-        dest.writestr('target.json',json.dumps({'base':'https://47.106.211.14','account_id':ident}))
+        for name in src.namelist():
+            if name!='target.json':dest.writestr(name,src.read(name))
+        base=os.environ.get('FINDMY_AUTH_PUBLIC_BASE') or sorted(ORIGINS)[0]
+        dest.writestr('target.json',json.dumps({'base':base,'account_id':ident}))
     return Response(output.getvalue(),media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="{ident}-authorize.zip"'})
 
 @app.api_route('/api/accounts/{ident}/proxy/{path:path}',methods=['GET','POST','DELETE'])
