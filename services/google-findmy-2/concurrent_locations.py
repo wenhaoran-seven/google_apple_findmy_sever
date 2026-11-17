@@ -78,6 +78,8 @@ class LocationTransport:
                 except backend.NeedsAuth:
                     self.auth_error_until = time.monotonic() + 60
                     raise
+                except backend.PublicError:
+                    raise
                 except Exception as error:
                     # Upstream also raises KeyError for a missing Auth field in
                     # temporary/error responses. This is not proof of revoked auth.
@@ -111,7 +113,7 @@ class LocationTransport:
                 if attempt:
                     with self.lock:
                         self.auth_error_until = time.monotonic() + 60
-                    raise backend.NeedsAuth('Google 查询授权被拒绝，请检查账号授权')
+                    raise backend.PublicError('刷新令牌后位置请求仍被拒绝，稍后重试；尚不能判定账号需要重新登录')
                 token = self._token(rejected=token)
                 continue
             if response.status_code != 200:

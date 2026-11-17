@@ -27,6 +27,8 @@ def setup(store):
     bootstrap.configure_cache(store)
     bootstrap.configure_network()
     bootstrap.fix_fcm_loop()
+    from auth_recovery import install
+    install(store, PublicError, NeedsAuth)
     if not all(store.get('auth:'+k) for k in ('username', 'aas_token', 'owner_key', 'fcm_credentials')):
         raise NeedsAuth('请先在本机完成 Google 登录和加密数据授权，再导入授权。')
     # Ensure no headless operation can unexpectedly launch Chrome or await input.

@@ -91,7 +91,8 @@ class Service:
                         self.store.put('device:'+d['id'], d)
 
     def ready(self):
-        return all(self.store.get('auth:'+k) for k in ('username', 'aas_token', 'owner_key', 'fcm_credentials'))
+        return (self.store.get('auth_recovery', {}).get('state') != 'reauthorization_required'
+                and all(self.store.get('auth:'+k) for k in ('username', 'aas_token', 'owner_key', 'fcm_credentials')))
 
     def device(self, id):
         d = self.store.get('device:'+id)
@@ -235,7 +236,7 @@ class Service:
     async def scheduler(self):
         while True:
             sync_google(self)
-            if self.ready() and not self.maintenance:
+            if self.ready() and not self.maintenance and self.store.get('auth_recovery', {}).get('retry_at', 0) <= time.time():
                 devices = self.store.all('device:')
                 renewal = self.store.get('renewal', {})
                 exclusions = excluded_eids(self.store)
@@ -312,6 +313,7 @@ def status(request: Request):
     location_jobs = s.store.recent_jobs(locations=True)
     stats = s.store.history_stats()
     return {'account':s.store.get('auth:username'),'authorized': s.ready(), 'last_sync': s.store.get('last_sync'), 'running_job': s.running,
+            'auth_recovery':s.store.get('auth_recovery', {}),
             'running_jobs': list(getattr(s, 'running_jobs', {})), 'query_concurrency': getattr(s, 'query_concurrency', 10),
             'query_cooldown_until': getattr(s, 'query_cooldown', 0),
             'devices': [public_device(d, s.store, exclusions, stats) for d in s.store.all('device:')], 'jobs': jobs[:30], 'location_jobs': location_jobs,
@@ -581,6 +583,7 @@ async def import_auth(request: Request):
         await s.location_pool.close()
         for name in ('username', 'aas_token', 'owner_key', 'fcm_credentials', 'shared_key'):
             if name in body: s.store.put('auth:'+name, body[name])
+        s.store.put('auth_recovery', {'state':'healthy', 'updated':time.time(), 'failures':0})
     finally:
         s.maintenance = False
     return {'imported': True, 'note': '已加密保存；请同步 Google 设备列表验证授权。'}

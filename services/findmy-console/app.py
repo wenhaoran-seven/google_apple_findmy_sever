@@ -101,7 +101,8 @@ def collector(a):
             devices=state['devices'];authorized=state.get('authorized',False)
             active={j.get('device_id') for j in state.get('location_jobs',[]) if j.get('id') in state.get('running_jobs',[]) and j.get('operation')=='locate'}
             devices=[{**d,'running':d['id'] in active} for d in devices]
-        return {**a,'available':True,'authorized':authorized,'email':state.get('account'),'auth_state':state.get('state'),'devices':devices}
+        return {**a,'available':True,'authorized':authorized,'email':state.get('account'),'auth_state':state.get('state'),'devices':devices,
+                'auth_recovery':state.get('auth_recovery', {})}
     except HTTPException as e:return {**a,'available':False,'error':e.detail,'devices':[]}
 
 def mac(pub):
