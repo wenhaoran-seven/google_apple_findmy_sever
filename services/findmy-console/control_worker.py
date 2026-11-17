@@ -2,6 +2,7 @@
 import asyncio, json, logging, time
 import app as host
 import control_store as store
+import account_health
 from fastapi import HTTPException
 
 log=logging.getLogger('findmy.control')
@@ -50,12 +51,24 @@ async def account_loop(ident):
         except Exception:log.exception('Account adapter error account=%s',ident)
         await asyncio.sleep(.5)
 
+async def health_loop():
+    async def check(a):
+        try:data=await asyncio.to_thread(host.relay,a,'auth/health')
+        except Exception:data={'unavailable':True}
+        await asyncio.to_thread(account_health.save,a,data)
+    while True:
+        try:await asyncio.gather(*(check(a) for a in host.accounts() if a['platform']=='google' and a['state']=='ready'))
+        except Exception:log.warning('Account health refresh failed')
+        await asyncio.sleep(5)
+
+
 async def main():
     host.initialize();store.recover()
+    account_health.initialize()
     # In-flight imports are intentionally retained; their existing per-item
     # checkpoints provide recovery. Web restarts no longer touch their state.
     jobs={}
-    background=[asyncio.create_task(host.import_loop()),asyncio.create_task(host.dual_add.worker())]
+    background=[asyncio.create_task(host.import_loop()),asyncio.create_task(host.dual_add.worker()),asyncio.create_task(health_loop())]
     try:
         while True:
             for a in host.accounts():

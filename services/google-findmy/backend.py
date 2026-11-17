@@ -352,6 +352,14 @@ def locate(store, device_id):
 def run(operation, device_id=None):
     store = Store()
     setup(store)
+    if operation == 'auth-check':
+        # Reuse the stored Android ID; do not open a second FCM receiver.
+        import gpsoauth
+        response = gpsoauth.perform_oauth(store.get('auth:username'), store.get('auth:aas_token'),
+            store.get('auth:fcm_credentials')['gcm']['android_id'],
+            service='oauth2:https://www.googleapis.com/auth/android_device_manager',
+            app='com.google.android.apps.adm', client_sig='38918a453d07199354f8b19af05ec6562ced5788')
+        return {'checked': bool(response.get('Auth'))}
     if operation == 'sync': return sync(store)
     if operation == 'register': return register(store, device_id)
     if operation == 'renew': return renew(store)

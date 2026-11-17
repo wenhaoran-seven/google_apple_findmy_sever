@@ -196,6 +196,7 @@ class Service:
                 d['next_run'] = time.time()+polling_seconds()
                 self.store.put('device:'+d['id'], d)
                 data = {'returned_count': len(points), 'new_count': added}
+                self.store.put('transport_health', {'state':'healthy','updated':time.time()})
             job.update(state='success', result=data)
         except asyncio.CancelledError:
             job.update(state='interrupted', error='服务停止中断查询，稍后自动重试')
@@ -203,6 +204,8 @@ class Service:
         except Exception as e:
             error = str(e) if isinstance(e, (RuntimeError, TimeoutError)) else f'任务失败（{type(e).__name__}）'
             job.update(state='failed', error=error)
+            if isinstance(e, PoolError):
+                self.store.put('transport_health', {'state':'retrying','updated':time.time()})
             if isinstance(e, PoolError) and e.rate_limited:
                 self.query_cooldown = max(self.query_cooldown, time.time()+900)
                 self.store.put('query_cooldown', self.query_cooldown)
@@ -238,6 +241,11 @@ class Service:
         while True:
             sync_google(self)
             if self.ready() and not self.maintenance and self.store.get('auth_recovery', {}).get('retry_at', 0) <= time.time():
+                health = self.store.get('auth_recovery', {})
+                last_check = max(health.get('updated', 0), self.store.get('auth_health_probe', 0))
+                if not self.running and not self.pending and time.time()-last_check >= 300:
+                    self.store.put('auth_health_probe', time.time())
+                    self.enqueue('auth-check')
                 devices = self.store.all('device:')
                 renewal = self.store.get('renewal', {})
                 exclusions = excluded_eids(self.store)
@@ -305,6 +313,13 @@ async def index(request: Request):
 async def static(name: str):
     if name not in ('app.js', 'style.css', 'unified-track.js', 'unified-track.css', 'database-tools.js', 'polling-settings.js', 'fleet.js'): raise HTTPException(404)
     return FileResponse(ROOT/'static'/name)
+
+
+@app.get('/api/auth/health')
+def auth_health(request: Request):
+    s=request.app.state.service
+    return {'authorized':s.ready(), 'auth_recovery':s.store.get('auth_recovery', {}),
+            'transport_health':s.store.get('transport_health', {})}
 
 
 @app.get('/api/status')

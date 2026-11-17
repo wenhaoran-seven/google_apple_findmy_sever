@@ -11,6 +11,7 @@ import central_locations as db
 import dual_add
 import control_store as control
 import cloud_auth
+import account_health
 import sys
 from polling_settings import install as install_polling
 
@@ -28,6 +29,7 @@ def initialize():
     db.initialize()
     dual_add.initialize()
     control.initialize()
+    account_health.initialize()
     cloud_auth.initialize()
     with db.connect() as con:
         con.executescript(SCHEMA)
@@ -210,6 +212,7 @@ async def lifespan(app):
 
 app=FastAPI(lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 install_polling(app);db.install(app);dual_add.install(app,sys.modules[__name__]);cloud_auth.install(app,sys.modules[__name__])
+account_health.install(app)
 
 @app.middleware('http')
 async def guard(request,call_next):
