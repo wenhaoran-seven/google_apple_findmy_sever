@@ -21,7 +21,10 @@ class CloudAuthorizationTests(unittest.TestCase):
   r=self.start();ident=r.json()['id'];url='/auth-browser/'+ident+'/connection'
   self.assertEqual(self.client.get(url).status_code,403)
   cookie=r.headers['set-cookie'].split(';')[0]
-  self.assertEqual(self.client.get(url,headers={'Cookie':cookie}).status_code,200)
+  response=self.client.get(url,headers={'Cookie':cookie})
+  self.assertEqual(response.status_code,200)
+  self.assertIn("img-src 'self' data:",response.headers['content-security-policy'])
+  self.assertNotIn("img-src 'self' data:",self.client.get('/view').headers['content-security-policy'])
   self.assertEqual(self.client.get('/auth-browser/wrong/connection',headers={'Cookie':cookie}).status_code,403)
   self.assertEqual(self.client.post('/auth-browser/'+ident+'/cancel',headers={'Cookie':cookie,'Origin':'https://evil.example','X-Auth-Action':'cancel'}).status_code,403)
   with auth.store.connect() as c:c.execute('UPDATE google_auth_sessions SET expires=? WHERE id=?',(time.time()-1,ident))

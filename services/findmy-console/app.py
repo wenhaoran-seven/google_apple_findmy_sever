@@ -223,6 +223,9 @@ async def guard(request,call_next):
     if int(request.headers.get('content-length','0'))>2_000_000:return JSONResponse({'detail':'请求过大'},413)
     response=await call_next(request)
     response.headers.update({'Cache-Control':'no-store','X-Frame-Options':'DENY','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':f"default-src 'self'; connect-src 'self' http://127.0.0.1:18765; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https://a.tile.openstreetmap.fr; frame-src {MAP}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"})
+    if request.url.path.startswith('/auth-browser/'):
+        # noVNC decodes framebuffer JPEG/PNG rectangles via data: image URLs.
+        response.headers['Content-Security-Policy']=response.headers['Content-Security-Policy'].replace("img-src 'self' https://a.tile.openstreetmap.fr", "img-src 'self' data:")
     return response
 
 @app.exception_handler(RequestValidationError)
