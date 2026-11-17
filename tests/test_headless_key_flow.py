@@ -48,9 +48,36 @@ class HeadlessKeyFlowTests(unittest.TestCase):
     self.browser.current_url='https://myaccount.google.com/'
     self.browser.authenticated=True
     assert condition(self.browser)
-  ns={'browser':browser,'CONFIG':{'email':'test@example.com'},'status':Mock(),'WebDriverWait':Wait,'urlencode':urlencode,'urlsplit':urlsplit,'time':time}
+  ns={'browser':browser,'CONFIG':{'email':'test@example.com'},'status':Mock(),'WebDriverWait':Wait,'urlencode':urlencode,'urlsplit':urlsplit,'time':time,'protected_data_rejected':lambda b:False}
   exec(compile(ast.Module(body=[encryption],type_ignores=[]),str(path),'exec'),ns)
   with patch.dict(sys.modules,{'KeyBackup.shared_key_request':request,'KeyBackup.response_parser':parser}):
    self.assertEqual(ns['encryption'](),'01'*32)
   self.assertIn('/ServiceLogin?',browser.navigations[0])
   self.assertIn('/encryption/unlock/',browser.navigations[1])
+
+ def test_rejection_requires_specific_google_page_and_message(self):
+  from urllib.parse import urlsplit
+  path=Path(__file__).resolve().parents[1]/'services/findmy-console/google_auth_runner.py'
+  tree=ast.parse(path.read_text(encoding='utf-8'))
+  helper=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='protected_data_rejected')
+  ns={'urlsplit':urlsplit};exec(compile(ast.Module(body=[helper],type_ignores=[]),str(path),'exec'),ns)
+  browser=Mock(current_url='https://accounts.google.com/v3/signin/rejected')
+  browser.execute_script.return_value='您的受保护数据尚未解锁'
+  self.assertTrue(ns['protected_data_rejected'](browser))
+  browser.execute_script.return_value='Another login error'
+  self.assertFalse(ns['protected_data_rejected'](browser))
+  browser.current_url='https://example.com/v3/signin/rejected'
+  browser.execute_script.return_value='您的受保护数据尚未解锁'
+  self.assertFalse(ns['protected_data_rejected'](browser))
+
+ def test_login_redirect_proxy_allowlist(self):
+  path=Path(__file__).resolve().parents[1]/'services/google-findmy/server_google_proxy.py'
+  tree=ast.parse(path.read_text(encoding='utf-8'))
+  helper=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='target')
+  ns={};exec(compile(ast.Module(body=[helper],type_ignores=[]),str(path),'exec'),ns)
+  for host in ('accounts.google.com.hk','accounts.youtube.com','accounts.google.com'):
+   self.assertEqual(ns['target'](host+':443'),(host,443))
+   with self.assertRaises(ValueError):ns['target'](host+':5228')
+  self.assertEqual(ns['target']('mtalk.google.com:5228'),('mtalk.google.com',5228))
+  for host in ('accounts.google.com.hk.evil.test','evilgoogle.com','example.com'):
+   with self.assertRaises(ValueError):ns['target'](host+':443')

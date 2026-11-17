@@ -15,7 +15,7 @@ async def relay(reader,writer):
     try:
         header=await asyncio.wait_for(reader.readuntil(b'\r\n\r\n'),10)
         method,target,_=header.split(b'\r\n')[0].decode().split();host,port=target.rsplit(':',1)
-        domains=('google.com','googleapis.com','gstatic.com','googleusercontent.com','accounts.youtube.com')
+        domains=('google.com','googleapis.com','gstatic.com','googleusercontent.com','accounts.youtube.com','accounts.google.com.hk')
         if method!='CONNECT' or port!='443' or not any(host==d or host.endswith('.'+d) for d in domains):raise ValueError('Blocked target')
         p=urlsplit(CONFIG['proxy'])
         upstream,remote=await asyncio.wait_for(asyncio.open_connection(p.hostname,p.port or 80),10)
@@ -51,6 +51,20 @@ def configure_shared_key_flow(flow):
     import KeyBackup.shared_key_retrieval as retrieval
     shared.request_shared_key_flow=flow
     retrieval._retrieve_shared_key=flow
+
+
+class ProtectedDataLocked(RuntimeError):
+    pass
+
+
+def protected_data_rejected(browser):
+    url=urlsplit(browser.current_url)
+    if url.hostname!='accounts.google.com' or url.path!='/v3/signin/rejected':
+        return False
+    text=browser.execute_script('return document.body ? document.body.innerText : ""') or ''
+    return any(message in text.lower() for message in (
+        '您的受保护数据尚未解锁', 'your protected data is locked',
+        'your protected data isn’t available', "your protected data isn't available"))
 
 
 def main():
@@ -108,6 +122,7 @@ def main():
             browser.execute_script(script)
             until=time.monotonic()+600
             while time.monotonic()<until:
+                if protected_data_rejected(browser):raise ProtectedDataLocked()
                 keys=browser.execute_script('return window.__findmyVaultKeys || null')
                 if keys:return get_fmdn_shared_key(keys).hex()
                 if browser.execute_script('return window.__findmyVaultClosed === true'):raise RuntimeError('Vault closed')
@@ -128,7 +143,10 @@ def main():
         # Never persist exception bodies, Google tokens, screenshots or passwords.
         import traceback
         (ROOT/'failure.json').write_text(json.dumps({'type':type(e).__name__,'frames':[{'file':Path(f.filename).name,'line':f.lineno,'function':f.name} for f in traceback.extract_tb(e.__traceback__)[-5:]]}))
-        status('failed','授权未完成（'+type(e).__name__+'），请检查 Google 页面提示后重新启动授权')
+        message=('Google 提示受保护数据尚未解锁，未取得离线查找加密密钥；原账号凭据未替换。请勿删除或重置受保护数据。'
+                 if isinstance(e,ProtectedDataLocked) else
+                 '授权未完成（'+type(e).__name__+'），请检查 Google 页面提示后重新启动授权')
+        status('failed',message)
     finally:
         if browser:
             with contextlib.suppress(Exception):browser.quit()

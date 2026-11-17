@@ -17,7 +17,7 @@ import aiohttp
 def target(authority):
     host, port = authority.lower().rsplit(':', 1)
     port = int(port)
-    domains = ('google.com', 'googleapis.com', 'gstatic.com', 'googleusercontent.com')
+    domains = ('google.com', 'googleapis.com', 'gstatic.com', 'googleusercontent.com', 'accounts.google.com.hk', 'accounts.youtube.com')
     allowed = any(host == d or host.endswith('.' + d) for d in domains)
     if not allowed or port not in (443, 5228, 5229, 5230):
         raise ValueError('Destination not allowed')
