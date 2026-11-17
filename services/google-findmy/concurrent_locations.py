@@ -138,7 +138,16 @@ class LocationSession:
 
     def wait_connected(self):
         deadline = time.monotonic() + 60
-        while not self.receiver.pc.is_started():
+        while True:
+            pc = self.receiver.pc
+            state = getattr(getattr(pc, 'run_state', None), 'name', '')
+            tasks = getattr(pc, 'tasks', ()) or ()
+            # The outer process can remain alive after the upstream listener
+            # terminates. Do not spend another minute waiting on dead tasks.
+            if state in ('STOPPING', 'STOPPED') or any(t.done() for t in tasks):
+                raise PushDisconnected('Google 推送监听已停止，正在重建连接')
+            if pc.is_started():
+                return
             if time.monotonic() >= deadline:
                 raise PushDisconnected('Google 推送通道未在 60 秒内完成连接登录；已请求重建连接，稍后自动重试')
             time.sleep(.1)

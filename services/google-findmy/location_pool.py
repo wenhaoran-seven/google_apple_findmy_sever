@@ -74,6 +74,16 @@ class LocationPool:
                 raise
 
     async def query(self, job_id, device_id):
+        # Only read-only location requests are retried. The failed process is
+        # closed in _query_once before a fresh receiver can accept this job.
+        for attempt in range(2):
+            try:
+                return await self._query_once(job_id, device_id)
+            except PoolError as error:
+                if not error.reset_connection or attempt or self.restart_after > time.monotonic():
+                    raise
+
+    async def _query_once(self, job_id, device_id):
         await self.start()
         process = self.process
         future = asyncio.get_running_loop().create_future()
