@@ -99,9 +99,12 @@ def main():
             from KeyBackup.shared_key_request import get_security_domain_request_url
             from KeyBackup.response_parser import get_fmdn_shared_key
             status('encryption')
+            # EmbeddedSetup's oauth_token is not a Google website login session.
+            browser.get('https://accounts.google.com/ServiceLogin?'+urlencode({'Email':CONFIG['email'],'continue':'https://myaccount.google.com/'}))
+            WebDriverWait(browser,600).until(lambda d:urlsplit(d.current_url).hostname=='myaccount.google.com')
             script="window.mm={setVaultSharedKeys:function(s,k){window.__findmyVaultKeys=k;},closeView:function(){window.__findmyVaultClosed=true;}};"
             browser.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument',{'source':script})
-            browser.get(get_security_domain_request_url())
+            browser.get(get_security_domain_request_url().strip())
             browser.execute_script(script)
             until=time.monotonic()+600
             while time.monotonic()<until:
