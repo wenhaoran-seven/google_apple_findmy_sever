@@ -77,6 +77,13 @@ def process(row):
             if e.status_code==409:
                 auth.update(ident,'waiting_import','已完成 Google 验证，等待当前采集任务结束后保存');return
             raise
+        # Publish the collector's confirmed state before announcing completion;
+        # otherwise the database-only UI can retain the pre-login state for 60s.
+        # A projection failure must not turn an already imported login into failure.
+        try:
+            store.save_projection(host.collector(host.account(row['account'])))
+        except Exception:
+            logging.warning('Authorization imported; account projection awaits periodic refresh')
         clean(ident);auth.update(ident,'complete');return
     if data.get('state') in ('google_login','encryption') and data['state']!=row['state']:
         auth.update(ident,data['state'])
