@@ -200,3 +200,5 @@ Google `upstream/` 包含 GoogleFindMyTools 派生代码及 GPL-3.0 许可证，
 临时进程限时1200秒、CPU75%、内存软限700MB/硬限900MB；小内存服务器启动可能较慢。取消或超时由管理器停止整个systemd控制组并删除临时文件。状态通过账号管理轮询，无密码、验证码、PIN或Google响应正文日志。排障看 `systemctl status findmy-google-auth-manager` 和对应journal；安全诊断仅保留异常类型与源码栈位置。
 
 部署烟雾测试可临时给管理器设置 `FINDMY_AUTH_TEST_MODE=1`，它只打开登录页，不导入凭据。测试后必须删除此环境设置并重启管理器。真实端到端授权仍需用户亲自完成 Google 登录与加密数据验证。
+
+当前公司内网迁移与配置要点见 [deploy/company-lan.md](deploy/company-lan.md)。原云端路径仍保留，入口地址与证书信任方式已改为内网部署。
