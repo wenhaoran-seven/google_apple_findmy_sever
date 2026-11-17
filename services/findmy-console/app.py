@@ -383,7 +383,11 @@ async def proxy(ident:str,path:str,request:Request):
         for d in (await get_snapshot())['devices']:
             if d['sn']==body['sn'] and any(m['platform']=='google' and m['account_id']!=ident for m in d['members']):raise HTTPException(409,'此 SN 已属于其他 Google 账号')
     from urllib.parse import urlencode
-    ident=control.submit(a['id'],path+('?' + urlencode(query) if query else ''),body,method)
+    import_key=request.headers.get('x-authorization-import-id')
+    if import_key and method=='POST' and path=='auth/import' and a['platform']=='google':
+        ident=control.submit_auth_import(a['id'],body,import_key)
+    else:
+        ident=control.submit(a['id'],path+('?' + urlencode(query) if query else ''),body,method)
     if request.headers.get('x-control-async')=='1':
         return JSONResponse({'control_task':ident},status_code=202)
     # Compatibility for existing authorization helpers. This awaits database

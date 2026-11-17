@@ -118,7 +118,11 @@ def main():
             print('授权文件已导出：'+str(path))
             print('文件包含账号访问凭据和解密密钥，请勿发聊天、邮件或提交 Git。')
         else:
-            upload(values, connection)
+            try:
+                upload(values, connection)
+            except Exception:
+                from transfer import UploadPending
+                raise UploadPending() from None
             print('授权已保存到目标服务器账号。请回网页同步 Google 设备验证。')
         status('complete')
     finally:
@@ -135,5 +139,10 @@ if __name__ == '__main__':
         import traceback
         status('failed', error_type=type(e).__name__, frames=[{'file':Path(f.filename).name, 'function':f.name, 'line':f.lineno} for f in traceback.extract_tb(e.__traceback__)[-5:]])
         # Do not expose Google response bodies or token-bearing exception messages.
-        print(f'授权未完成（{type(e).__name__}）。请确认手机已开启离线查找、Chrome 已更新，并检查网络。')
+        from transfer import UploadPending
+        if isinstance(e, UploadPending):
+            status('upload_pending')
+            print('Google 授权已完成，本机凭据已保存；上传尚未确认。请恢复网络后运行 Resume-Upload.cmd，无需重新登录 Google。')
+        else:
+            print(f'授权未完成（{type(e).__name__}）。请检查提示与网络；如已有完整本机授权，可运行 Resume-Upload.cmd。')
         sys.exit(1)

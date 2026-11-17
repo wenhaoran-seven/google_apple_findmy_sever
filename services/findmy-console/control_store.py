@@ -40,6 +40,7 @@ def initialize():
         CREATE TABLE IF NOT EXISTS projections(account TEXT PRIMARY KEY,payload TEXT,updated REAL,checked REAL,error TEXT);
         CREATE TABLE IF NOT EXISTS names(device_key TEXT PRIMARY KEY,name TEXT,revision TEXT,updated REAL,error TEXT);
         CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,account TEXT,path TEXT,method TEXT,payload TEXT,state TEXT,result TEXT,code INTEGER,created REAL,updated REAL);
+        CREATE TABLE IF NOT EXISTS auth_import_requests(request_id TEXT PRIMARY KEY,account TEXT,digest TEXT,task TEXT UNIQUE);
         CREATE INDEX IF NOT EXISTS command_pending ON commands(state,created);
         ''')
 
@@ -81,6 +82,23 @@ def submit(account,path,body,method):
         c.execute('INSERT INTO commands VALUES(?,?,?,?,?,\'queued\',NULL,NULL,?,?)',(ident,account,path,method,pack(body),now,now))
     return ident
 
+def submit_auth_import(account,body,request_id):
+    import hashlib
+    try:request_id=str(uuid.UUID(request_id))
+    except (ValueError,AttributeError):raise HTTPException(422,'授权导入请求编号无效')
+    digest=hashlib.sha256(json.dumps(body,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    with connect() as c:
+        c.execute('BEGIN IMMEDIATE')
+        old=c.execute('SELECT * FROM auth_import_requests WHERE request_id=?',(request_id,)).fetchone()
+        if old:
+            if old['account']!=account or old['digest']!=digest:raise HTTPException(409,'请求编号已用于其他授权数据')
+            return old['task']
+        ident=str(uuid.uuid4());now=time.time()
+        c.execute("INSERT INTO commands VALUES(?,?,?,'POST',?,'queued',NULL,NULL,?,?)",(ident,account,'auth/import',pack(body),now,now))
+        c.execute('INSERT INTO auth_import_requests VALUES(?,?,?,?)',(request_id,account,digest,ident))
+    return ident
+
+
 def read(ident):
     with connect() as c:r=c.execute('SELECT * FROM commands WHERE id=?',(ident,)).fetchone()
     if not r:raise HTTPException(404,'后台任务不存在或已过期')
@@ -103,4 +121,4 @@ def finish(ident,result,code=200):
 def cleanup():
     with connect() as c:
         c.execute("UPDATE commands SET state='failed',payload=?,result=?,code=503,updated=? WHERE state='queued' AND created<?",(pack(None),pack({'detail':'后台任务等待超时，未执行，请核对后台服务'}),time.time(),time.time()-900))
-        c.execute("DELETE FROM commands WHERE state NOT IN ('queued','running') AND updated<?",(time.time()-3600,))
+        c.execute("DELETE FROM commands WHERE state NOT IN ('queued','running') AND updated<? AND id NOT IN (SELECT task FROM auth_import_requests)",(time.time()-3600,))

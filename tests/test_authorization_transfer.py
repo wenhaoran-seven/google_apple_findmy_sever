@@ -31,3 +31,18 @@ class TransferTests(unittest.TestCase):
   class Opener:
    def open(self,r,timeout):return Response({'control_task':'test-task'} if r.get_method()=='POST' else {'state':'failed','code':409,'result':{}})
   with tempfile.TemporaryDirectory() as d,patch.object(m,'ROOT',Path(d)),self.assertRaises(RuntimeError):m.upload(sample(),(Opener(),'https://example.com','google5','test-only'))
+ def test_connection_reset_reuses_persisted_request_id(self):
+  class Opener:
+   requests=[]
+   def open(self,r,timeout):
+    self.requests.append(r)
+    if len(self.requests)==1:raise ConnectionResetError()
+    return Response({'control_task':'test-task'} if r.get_method()=='POST' else {'state':'done','code':200,'result':{'imported':True}})
+  op=Opener()
+  with tempfile.TemporaryDirectory() as d,patch.object(m,'ROOT',Path(d)),patch.object(m.time,'sleep'):
+   m.upload(sample(),(op,'https://example.com','google5','test-only'))
+   receipt=json.loads((Path(d)/'last-import-task.json').read_text())
+   ids=[r.get_header('X-authorization-import-id') for r in op.requests if r.get_method()=='POST']
+   self.assertEqual(ids,[receipt['request_id']]*2)
+   self.assertTrue(receipt['confirmed'])
+   self.assertNotIn('test-only',json.dumps(receipt))
