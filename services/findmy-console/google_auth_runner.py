@@ -45,6 +45,14 @@ def proxy_thread():
         async with server:await server.serve_forever()
     asyncio.run(main())
 
+def configure_shared_key_flow(flow):
+    """Replace only the CLI confirmation wrapper, retaining upstream key caching."""
+    import KeyBackup.shared_key_flow as shared
+    import KeyBackup.shared_key_retrieval as retrieval
+    shared.request_shared_key_flow=flow
+    retrieval._retrieve_shared_key=flow
+
+
 def main():
     logging.disable(logging.CRITICAL)
     os.environ.update(DISPLAY=':91',HOME=str(ROOT),GOOGLEFINDMY_PROXY=CONFIG['proxy'],HTTP_PROXY=CONFIG['proxy'],HTTPS_PROXY=CONFIG['proxy'],NO_PROXY='127.0.0.1,localhost')
@@ -102,7 +110,7 @@ def main():
                 if browser.execute_script('return window.__findmyVaultClosed === true'):raise RuntimeError('Vault closed')
                 time.sleep(.5)
             raise TimeoutError('Vault authorization timed out')
-        shared.request_shared_key_flow=encryption
+        configure_shared_key_flow(encryption)
         from Auth.aas_token_retrieval import get_aas_token
         from SpotApi.GetEidInfoForE2eeDevices.get_owner_key import get_owner_key
         get_aas_token()
